@@ -154,6 +154,35 @@ F. **Streaming:** per-step SVD vs Frequent Directions/POD—cumulative alignment
 6. **Computational Study** (2 p): unified benchmarks & results.
 7. **Takeaways & Guidelines** (½ p).
 8. **Limitations & Future Work** (½ p).
-    
+
     Appendices: proofs, algorithm listings, extra plots.
+
+---
+
+## 10) Empirical Highlights (latest run)
+
+- **Weighted geometry:** Whitening drops the anisotropic Frobenius objective by roughly 11% (31.7 → 28.3) at the cost of a modest rise in unweighted error, reinforcing the need to match the metric to the task.【F:experiments/results/summary.md†L11-L15】
+- **Descent alignment:** Preconditioning improves weighted cosine alignment and inner-product descent compared with vanilla SVD, while slightly lowering the standard cosine, underscoring geometry trade-offs.【F:experiments/results/summary.md†L17-L26】
+- **Robustness:** Quantile-trimmed updates shrink the L₁ reconstruction gap from 424 to 31 and the Frobenius gap from 265 to 24, validating the heavy-tail mitigation hypothesis.【F:experiments/results/summary.md†L28-L34】
+- **Tensor structure:** Matricized SVD overfits matrix-rank interference (≈0.04% error to the observed tensor) yet stays 54% further from the clean multilinear signal than HOSVD, illustrating the benefit of tensor-aware constraints.【F:experiments/results/summary.md†L36-L42】
+- **Streaming:** Frequent Directions maintains a rolling sketch with ≈10× lower cumulative error than a comparably budgeted periodic SVD, while using only eight heavy recomputations versus per-step refits.【F:experiments/results/summary.md†L44-L49】
+
+## 10) Experiments & Empirical Findings
+
+The `experiments/` package implements the empirical demonstrations promised above. Run the full suite (≈20 seconds on a laptop) via:
+
+```bash
+python -m experiments.experiment_suite
+```
+
+Results are written to `experiments/results/summary.md` and `summary.npy`. The main takeaways from the default seed are:
+
+- **Classical regime (RQ1):** Truncated and randomized SVD remain numerically indistinguishable under Frobenius/Operator norms, whereas a leverage-score CUR baseline trails by roughly 4× in error.【F:experiments/experiment_suite.py†L37-L62】【F:experiments/results/summary.md†L1-L8】
+- **Weighted geometry (RQ2):** Ill-conditioned weights make vanilla SVD misspecify the task metric; whitening cuts the weighted loss by ~11% even as the unweighted Frobenius error rises slightly.【F:experiments/experiment_suite.py†L64-L104】【F:experiments/results/summary.md†L10-L16】
+- **Descent constraints (RQ3):** Preconditioning improves weighted cosine alignment and descent energy at the expense of standard cosine similarity, illustrating the geometry trade-off explicitly.【F:experiments/experiment_suite.py†L106-L138】【F:experiments/results/summary.md†L17-L26】
+- **Robustness (RQ4):** Quantile trimming before the low-rank fit slashes both L₁ and Frobenius error against the clean matrix and nudges cosine alignment upward.【F:experiments/experiment_suite.py†L140-L170】【F:experiments/results/summary.md†L28-L34】
+- **Tensor structure (RQ5):** When matrix-rank interference is injected, matricized SVD overfits the corruption (≈0.04% error to the observed tensor) yet stays far from the clean multilinear component, while HOSVD better preserves the planted factors.【F:experiments/experiment_suite.py†L172-L206】【F:experiments/results/summary.md†L36-L42】
+- **Streaming gradients (RQ6):** Frequent Directions beats a compute-matched periodic SVD refit by an order of magnitude in cumulative error while requiring only eight heavy recomputations, with the per-step SVD reported as an oracle lower bound.【F:experiments/experiment_suite.py†L208-L266】【F:experiments/results/summary.md†L44-L49】
+
+Use the saved NumPy file or Markdown summary to drive figure generation in the paper draft.
 
