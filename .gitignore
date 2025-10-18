@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.npy
+
+# Generated experiment outputs
+experiments/results/latest.txt
