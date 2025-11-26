@@ -63,7 +63,7 @@ The experiments below are designed to answer exactly these, in a way that’s sm
 
 ## 2. Overview of Experiments
 
-We’ll run three main experiments:
+We’ll run four main experiments:
 
 1. **Experiment 1 (Approximation):**
    Compare vanilla vs whitened SVD under a weighted Frobenius norm and show the gap grows with the conditioning of (W_L, W_R).
@@ -73,6 +73,9 @@ We’ll run three main experiments:
 
 3. **Experiment 3 (Tiny counterexample):**
    Construct an explicit small matrix + SPD weight where whitened SVD beats vanilla SVD in the weighted norm; put values in a table.
+
+4. **Experiment 4 (Adaptive diagonal metric):**
+   Track an Adam-like diagonal SPD metric built from past gradients and test whether low-rank directions chosen in the whitened space yield larger cumulative linearized drop than vanilla SVD directions under the same weighted trust region.
 
 All experiments are on **synthetic matrices**; no ML training involved.
 
@@ -94,6 +97,7 @@ Show empirically that under the weighted Frobenius norm (|\cdot|_{W_L,W_R}),
 * Approximation ranks: (k \in {1,2,5,10}).
 * Condition numbers for SPD weights: (\kappa \in {1, 5, 10, 50, 100}).
 * Number of random trials per configuration: e.g. 20.
+* **Two-sided weighting by default:** the code samples **independent SPD matrices** (W_L \in \mathbb{R}^{m\times m}) and (W_R \in \mathbb{R}^{n\times n}) with the same target condition number. This explicitly exercises anisotropy in both the row and column spaces; set `two_sided=False` to fall back to (W_L = W_R).
 
 ### Data generation per trial
 
@@ -109,13 +113,12 @@ Show empirically that under the weighted Frobenius norm (|\cdot|_{W_L,W_R}),
 
 2. **Generate SPD weights (W_L, W_R):**
 
-   * For simplicity, you can even take (W_L = W_R = W).
-   * Sample a random orthogonal matrix (Q) via QR on a Gaussian matrix.
+   * Sample a random orthogonal matrix (Q) via QR on a Gaussian matrix **independently for the left and right metrics** (unless you set `two_sided=False`).
    * Choose eigenvalues (\lambda_i) between 1 and (\kappa), e.g. log-spaced:
      [
      \lambda_i = \exp\left(\log 1 + \frac{i-1}{m-1}\log \kappa\right).
      ]
-   * Define (W = Q ,\text{diag}(\lambda_i) Q^\top).
+   * Define (W_L = Q_L ,\text{diag}(\lambda_i) Q_L^\top) and (W_R = Q_R ,\text{diag}(\lambda_i) Q_R^\top). Two-sided metrics highlight when whitening genuinely needs to happen on both sides.
 
 ### Methods to compare
 
@@ -336,9 +339,75 @@ This makes the whole story extremely concrete: even in 2×2 you can see SVD is n
 
 ---
 
+## 6. Experiment 4 — Adaptive Diagonal Metric (Adam-like) and Low-Rank Updates
+
+### Goal
+
+Study how a **time-varying diagonal SPD metric** built from gradient history changes which low-rank directions give the biggest weighted linearized drop, under a shared weighted trust-region radius.
+
+### Metric construction
+
+* Maintain an Adam-style accumulator: (v_t = \beta v_{t-1} + (1-\beta) g_t \odot g_t) with (g_t = \operatorname{vec}(G_t)).
+* Define diagonal weights (w_t = 1/(\sqrt{v_t}+\epsilon)); use elementwise scaling to represent (W_t^{1/2}).
+* Defaults: (\beta = 0.95), (\epsilon = 10^{-8}); adjust `beta`, `epsilon`, or `drift_scale` in `ExperimentConfig` to test different memory lengths or slowly rotating singular vectors.
+
+### Data generation per step
+
+* Low-rank signal (rank-10) with geometric singular decay (α=0.7) plus small Gaussian noise.
+* Optionally drift the singular subspaces over time via small QR re-orthogonalizations (controlled by `drift_scale`).
+* Dimensions: (m = n = 100); number of steps `time_steps` defaults to 50.
+
+### Methods compared each step (ranks `exp4_ranks`, default {5,10})
+
+1. **Vanilla SVD direction**: truncate the raw gradient, rescale to satisfy (|W_t^{1/2}\Delta|_F = \rho).
+2. **Whitened SVD direction**: truncate the whitened gradient (W_t^{1/2} G_t), rescale inside the whitened space, then map back with (W_t^{-1/2}).
+
+Both updates are rank-(k) and sit on the same weighted trust-region boundary.
+
+### Metrics and reporting
+
+* Track per-step linearized drops (-\langle G_t, \Delta_t\rangle) and their cumulative sums for both methods.
+* Plot cumulative drops vs step for each rank; log CSVs for per-step values plus a small summary CSV containing the final ratio (D_{\mathrm{cum,white}} / D_{\mathrm{cum,van}}).
+
+Expected outcome: the whitened SVD directions steadily accrue larger weighted linearized descent because they align with the metric-implied geometry at each time step.
+
+---
+
 That’s the full, self-contained package:
 
 * Clear **motivation** (weighted norms from preconditioning),
 * A clean **problem statement** (when is truncated SVD optimal vs whitened SVD),
 * And **experiment designs** that directly match your theoretical claims, easy to code, and easy for someone else to understand and reproduce.
 
+
+---
+
+## Running the provided experiments
+
+The repository now ships a single driver (`experiments.py`) that implements all four experiments in this document using only
+NumPy and Matplotlib. The emphasis is on reproducible scientific-computing workflows (QR-based orthonormal factors, explicit
+SPD eigen decompositions, deterministic seeds) rather than any ML-specific tooling.
+
+### Quick start
+
+```bash
+pip install -r requirements.txt
+python experiments.py --output results
+```
+
+This will create `results/exp1`–`results/exp4` containing CSV summaries and publication-style plots for the
+approximation, trust-region, adaptive-metric, and counterexample studies.
+
+### Tuning choices
+
+* **Geometric SPD spectra:** We sample eigenvalues between 1 and κ on a log scale to control anisotropy smoothly and keep the
+  matrix conditioning explicit in the plots.
+* **Low-rank signal + small noise:** A geometric singular-value decay (α=0.7) with tiny Gaussian noise follows the toy design in
+  the write-up while keeping the SVDs numerically stable across 20 trials per configuration.
+* **Trust-region normalization:** Steps are rescaled so that both vanilla and whitened updates sit on the same weighted
+  constraint boundary, isolating the effect of the metric on the linearized loss drop.
+* **Adaptive diagonal metrics:** Experiment 4 uses an Adam-like accumulator (`beta`, `epsilon`) and elementwise whitening to
+  mimic curvature-aware scaling without relying on any ML framework.
+
+Adjust `ExperimentConfig` inside `experiments.py` to explore different sizes, trial counts, or noise levels; every output file is
+labelled with κ and rank so new sweeps remain easy to analyze.
