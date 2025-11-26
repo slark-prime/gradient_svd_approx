@@ -94,6 +94,7 @@ Show empirically that under the weighted Frobenius norm (|\cdot|_{W_L,W_R}),
 * Approximation ranks: (k \in {1,2,5,10}).
 * Condition numbers for SPD weights: (\kappa \in {1, 5, 10, 50, 100}).
 * Number of random trials per configuration: e.g. 20.
+* **Two-sided weighting by default:** the code samples **independent SPD matrices** (W_L \in \mathbb{R}^{m\times m}) and (W_R \in \mathbb{R}^{n\times n}) with the same target condition number. This explicitly exercises anisotropy in both the row and column spaces; set `two_sided=False` to fall back to (W_L = W_R).
 
 ### Data generation per trial
 
@@ -109,13 +110,12 @@ Show empirically that under the weighted Frobenius norm (|\cdot|_{W_L,W_R}),
 
 2. **Generate SPD weights (W_L, W_R):**
 
-   * For simplicity, you can even take (W_L = W_R = W).
-   * Sample a random orthogonal matrix (Q) via QR on a Gaussian matrix.
+   * Sample a random orthogonal matrix (Q) via QR on a Gaussian matrix **independently for the left and right metrics** (unless you set `two_sided=False`).
    * Choose eigenvalues (\lambda_i) between 1 and (\kappa), e.g. log-spaced:
      [
      \lambda_i = \exp\left(\log 1 + \frac{i-1}{m-1}\log \kappa\right).
      ]
-   * Define (W = Q ,\text{diag}(\lambda_i) Q^\top).
+   * Define (W_L = Q_L ,\text{diag}(\lambda_i) Q_L^\top) and (W_R = Q_R ,\text{diag}(\lambda_i) Q_R^\top). Two-sided metrics highlight when whitening genuinely needs to happen on both sides.
 
 ### Methods to compare
 
@@ -342,3 +342,33 @@ That’s the full, self-contained package:
 * A clean **problem statement** (when is truncated SVD optimal vs whitened SVD),
 * And **experiment designs** that directly match your theoretical claims, easy to code, and easy for someone else to understand and reproduce.
 
+
+---
+
+## Running the provided experiments
+
+The repository now ships a single driver (`experiments.py`) that implements all three experiments in this document using only
+NumPy and Matplotlib. The emphasis is on reproducible scientific-computing workflows (QR-based orthonormal factors, explicit
+SPD eigen decompositions, deterministic seeds) rather than any ML-specific tooling.
+
+### Quick start
+
+```bash
+pip install -r requirements.txt
+python experiments.py --output results
+```
+
+This will create `results/exp1`, `results/exp2`, and `results/exp3` containing CSV summaries and publication-style plots for the
+approximation and trust-region studies, plus a text table for the 2×2 counterexample.
+
+### Tuning choices
+
+* **Geometric SPD spectra:** We sample eigenvalues between 1 and κ on a log scale to control anisotropy smoothly and keep the
+  matrix conditioning explicit in the plots.
+* **Low-rank signal + small noise:** A geometric singular-value decay (α=0.7) with tiny Gaussian noise follows the toy design in
+  the write-up while keeping the SVDs numerically stable across 20 trials per configuration.
+* **Trust-region normalization:** Steps are rescaled so that both vanilla and whitened updates sit on the same weighted
+  constraint boundary, isolating the effect of the metric on the linearized loss drop.
+
+Adjust `ExperimentConfig` inside `experiments.py` to explore different sizes, trial counts, or noise levels; every output file is
+labelled with κ and rank so new sweeps remain easy to analyze.

@@ -1,0 +1,14 @@
+Tiny 2x2 counterexample (kappa=50)
+Original G:
+[[ 1.   0.2]
+ [ 2.  -0.1]]
+
+Rank-1 SVD:
+[[1. 0.]
+ [2. 0.]]
+Weighted error: 0.734847
+
+Whitened rank-1 SVD:
+[[ 0.99975744 -0.04874469]
+ [ 2.00000242 -0.09751316]]
+Weighted error: 0.249371
