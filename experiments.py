@@ -11,17 +11,34 @@ import numpy as np
 
 @dataclass
 class ExperimentConfig:
-    m: int = 100
-    n: int = 100
-    r_true: int = 10
-    ranks: Tuple[int, ...] = (1, 2, 5, 10)
-    kappas: Tuple[float, ...] = (1, 5, 10, 50, 100)
-    trials: int = 20
+    # matrix and rank structure
+    m: int = 1000
+    n: int = 1000
+    r_true: int = 50  # or 50; something > max rank but ≪ 1000
+    ranks: Tuple[int, ...] = (2, 4, 8, 16, 32, 64, 128, 256)
+
+    # geometry / conditioning
+    kappas: Tuple[float, ...] = (1, 10, 100, 1000)
+
+    # sampling / noise
+    trials: int = 10          # reduce a bit for 1000×1000
     alpha: float = 0.7
     noise_std: float = 0.01
+
+    # trust-region / descent
     trust_region_radius: float = 1.0
+
+    # reproducibility
     seed: int = 0
-    two_sided: bool = True
+    two_sided: bool = True    # keep; see note below
+
+    # adaptive experiment (Exp 4)
+    time_steps: int = 30      # 50 may be OK, but 30 is saner at 1k×1k
+    exp4_ranks: Tuple[int, ...] = (8, 32, 128)
+    beta: float = 0.95
+    epsilon: float = 1e-8
+    drift_scale: float = 0.0  # or e.g. 0.05 if you add drift
+
 
 
 def _spd_matrix(dim: int, kappa: float, rng: np.random.Generator) -> np.ndarray:
@@ -82,6 +99,16 @@ def _generate_matrix(cfg: ExperimentConfig, rng: np.random.Generator) -> np.ndar
     core = U @ np.diag(sigmas) @ V.T
     noise = cfg.noise_std * rng.standard_normal((cfg.m, cfg.n))
     return core + noise
+
+
+def _drift_orthonormal(
+    base: np.ndarray, rng: np.random.Generator, scale: float
+) -> np.ndarray:
+    if scale <= 0:
+        return base
+    perturbed = base + scale * rng.standard_normal(base.shape)
+    q, _ = np.linalg.qr(perturbed)
+    return q[:, : base.shape[1]]
 
 
 def _write_records(records: Iterable[Dict[str, float]], path: Path) -> None:
@@ -247,10 +274,120 @@ def run_experiment3(out_dir: Path) -> Dict[str, float]:
     return table
 
 
+def run_experiment4(cfg: ExperimentConfig, out_dir: Path) -> List[Dict[str, float]]:
+    rng = np.random.default_rng(cfg.seed + 2)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    records: List[Dict[str, float]] = []
+
+    U, _ = np.linalg.qr(rng.standard_normal((cfg.m, cfg.r_true)))
+    V, _ = np.linalg.qr(rng.standard_normal((cfg.n, cfg.r_true)))
+    sigmas = np.array([cfg.alpha ** i for i in range(cfg.r_true)])
+
+    second_moment = np.zeros(cfg.m * cfg.n)
+    cumulative_vanilla = {k: 0.0 for k in cfg.exp4_ranks}
+    cumulative_white = {k: 0.0 for k in cfg.exp4_ranks}
+
+    for step in range(cfg.time_steps):
+        if step > 0 and cfg.drift_scale > 0:
+            U = _drift_orthonormal(U, rng, cfg.drift_scale)
+            V = _drift_orthonormal(V, rng, cfg.drift_scale)
+
+        core = U @ np.diag(sigmas) @ V.T
+        noise = cfg.noise_std * rng.standard_normal((cfg.m, cfg.n))
+        G = core + noise
+
+        g_vec = G.reshape(-1)
+        squared = g_vec * g_vec
+        second_moment = cfg.beta * second_moment + (1.0 - cfg.beta) * squared
+        w_diag = 1.0 / (np.sqrt(second_moment) + cfg.epsilon)
+        sqrt_w = np.sqrt(w_diag).reshape(cfg.m, cfg.n)
+        inv_sqrt_w = 1.0 / sqrt_w
+
+        for k in cfg.exp4_ranks:
+            u, s, vt = _truncated_svd(G, k)
+            Gk = u @ np.diag(s) @ vt
+            D_vanilla = -Gk
+            weighted_norm = np.linalg.norm(sqrt_w * D_vanilla, ord="fro")
+            alpha = cfg.trust_region_radius / weighted_norm if weighted_norm > 0 else 0.0
+            delta_vanilla = alpha * D_vanilla
+
+            drop_vanilla = -np.tensordot(G, delta_vanilla, axes=2)
+
+            G_tilde = sqrt_w * G
+            u_t, s_t, vt_t = _truncated_svd(G_tilde, k)
+            G_tilde_k = u_t @ np.diag(s_t) @ vt_t
+            tilde_norm = np.linalg.norm(G_tilde_k, ord="fro")
+            beta_scale = (
+                cfg.trust_region_radius / tilde_norm if tilde_norm > 0 else 0.0
+            )
+            delta_white = -beta_scale * (G_tilde_k * inv_sqrt_w)
+            drop_white = -np.tensordot(G, delta_white, axes=2)
+
+            cumulative_vanilla[k] += float(drop_vanilla)
+            cumulative_white[k] += float(drop_white)
+
+            records.append(
+                {
+                    "experiment": 4,
+                    "step": step,
+                    "rank": k,
+                    "drop_vanilla": float(drop_vanilla),
+                    "drop_whitened": float(drop_white),
+                    "cum_drop_vanilla": cumulative_vanilla[k],
+                    "cum_drop_whitened": cumulative_white[k],
+                    "beta": cfg.beta,
+                    "epsilon": cfg.epsilon,
+                    "drift_scale": cfg.drift_scale,
+                }
+            )
+
+    for k in cfg.exp4_ranks:
+        steps = [r["step"] for r in records if r["rank"] == k]
+        cum_v = [r["cum_drop_vanilla"] for r in records if r["rank"] == k]
+        cum_w = [r["cum_drop_whitened"] for r in records if r["rank"] == k]
+
+        plt.figure(figsize=(6, 4))
+        plt.plot(steps, cum_v, label="vanilla")
+        plt.plot(steps, cum_w, label="whitened")
+        plt.xlabel("Step")
+        plt.ylabel("Cumulative linearized drop")
+        plt.title(f"Experiment 4: adaptive metric, rank={k}")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(out_dir / f"experiment4_rank{k}.png", dpi=200)
+        plt.close()
+
+    summary_rows = []
+    for k in cfg.exp4_ranks:
+        ratio = cumulative_white[k] / cumulative_vanilla[k] if cumulative_vanilla[k] else float("inf")
+        summary_rows.append(
+            {
+                "rank": k,
+                "cum_drop_vanilla": cumulative_vanilla[k],
+                "cum_drop_whitened": cumulative_white[k],
+                "ratio_whitened_over_vanilla": ratio,
+                "beta": cfg.beta,
+                "epsilon": cfg.epsilon,
+                "drift_scale": cfg.drift_scale,
+                "time_steps": cfg.time_steps,
+            }
+        )
+
+    _write_records(records, out_dir / "experiment4_records.csv")
+    _write_records(summary_rows, out_dir / "experiment4_summary.csv")
+    return records
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run weighted SVD experiments.")
     parser.add_argument("--output", type=Path, default=Path("results"), help="Directory for outputs")
-    parser.add_argument("--skip", nargs="*", default=(), choices=["exp1", "exp2", "exp3"], help="Experiments to skip")
+    parser.add_argument(
+        "--skip",
+        nargs="*",
+        default=(),
+        choices=["exp1", "exp2", "exp3", "exp4"],
+        help="Experiments to skip",
+    )
     args = parser.parse_args()
 
     cfg = ExperimentConfig()
@@ -263,6 +400,8 @@ def main():
         run_experiment2(cfg, out_dir / "exp2")
     if "exp3" not in args.skip:
         run_experiment3(out_dir / "exp3")
+    if "exp4" not in args.skip:
+        run_experiment4(cfg, out_dir / "exp4")
 
 
 if __name__ == "__main__":
