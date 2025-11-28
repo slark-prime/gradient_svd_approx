@@ -11,22 +11,34 @@ import numpy as np
 
 @dataclass
 class ExperimentConfig:
-    m: int = 100
-    n: int = 100
-    r_true: int = 10
-    ranks: Tuple[int, ...] = (1, 2, 5, 10)
-    kappas: Tuple[float, ...] = (1, 5, 10, 50, 100)
-    trials: int = 20
+    # matrix and rank structure
+    m: int = 1000
+    n: int = 1000
+    r_true: int = 50  # or 50; something > max rank but ≪ 1000
+    ranks: Tuple[int, ...] = (2, 4, 8, 16, 32, 64, 128, 256)
+
+    # geometry / conditioning
+    kappas: Tuple[float, ...] = (1, 10, 100, 1000)
+
+    # sampling / noise
+    trials: int = 10          # reduce a bit for 1000×1000
     alpha: float = 0.7
     noise_std: float = 0.01
+
+    # trust-region / descent
     trust_region_radius: float = 1.0
+
+    # reproducibility
     seed: int = 0
-    two_sided: bool = True
-    time_steps: int = 50
-    exp4_ranks: Tuple[int, ...] = (5, 10)
+    two_sided: bool = True    # keep; see note below
+
+    # adaptive experiment (Exp 4)
+    time_steps: int = 30      # 50 may be OK, but 30 is saner at 1k×1k
+    exp4_ranks: Tuple[int, ...] = (8, 32, 128)
     beta: float = 0.95
     epsilon: float = 1e-8
-    drift_scale: float = 0.0
+    drift_scale: float = 0.0  # or e.g. 0.05 if you add drift
+
 
 
 def _spd_matrix(dim: int, kappa: float, rng: np.random.Generator) -> np.ndarray:
